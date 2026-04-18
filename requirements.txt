@@ -1,0 +1,2 @@
+# Python 3.11+. Runtime uses the standard library only (no crawl/search frameworks).
+# Optional dev tools: pytest, ruff, mypy — add here if you adopt them later.

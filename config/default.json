@@ -1,0 +1,7 @@
+{
+  "db_path": "data/crawler.db",
+  "max_workers": 4,
+  "fetch_timeout_sec": 15.0,
+  "queue_max_size": 1000,
+  "user_agent": "LocalCrawler/1.0 (+education)"
+}

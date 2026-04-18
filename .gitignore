@@ -1,0 +1,29 @@
+# Bytecode / caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local SQLite (paths match config/default.json by default)
+data/*.db
+data/*.db-wal
+data/*.db-shm
+
+# Packaging / coverage
+*.egg-info/
+dist/
+build/
+.coverage
+htmlcov/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
