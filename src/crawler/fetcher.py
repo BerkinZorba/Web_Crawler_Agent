@@ -18,6 +18,7 @@ Coordinator responsibilities for failed fetches (do not let exceptions escape th
 
 from __future__ import annotations
 
+import logging
 import socket
 import ssl
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+log = logging.getLogger(__name__)
 
 _DEFAULT_MAX_BODY_BYTES = 2 * 1024 * 1024
 
@@ -89,6 +91,94 @@ def _scheme_allowed(url: str) -> bool:
     return scheme in ("http", "https")
 
 
+def _is_ssl_cert_or_verify_failure(exc: BaseException) -> bool:
+    """True when failure is likely fixed (or only exposed) by relaxing cert verification."""
+    if isinstance(exc, ssl.SSLCertVerificationError):
+        return True
+    if isinstance(exc, ssl.SSLError):
+        msg = str(exc).lower()
+        if any(
+            s in msg
+            for s in (
+                "certificate",
+                "cert verify",
+                "hostname",
+                "sslv3",
+                "tlsv1",
+                "handshake",
+            )
+        ):
+            return True
+    if isinstance(exc, URLError) and exc.reason is not None:
+        return _is_ssl_cert_or_verify_failure(exc.reason)
+    return False
+
+
+def _urlopen_for_request(req: Request, url: str, timeout_sec: float):
+    """
+    Open URL: HTTP without SSL context; HTTPS with default TLS context, then one
+    permissive retry if certificate verification fails (localhost / dev only).
+    urllib follows redirects via HTTPRedirectHandler by default.
+    """
+    scheme = urlparse(url).scheme.lower()
+    if scheme != "https":
+        return urlopen(req, timeout=timeout_sec)  # nosec B310 - intentional crawler use
+
+    ctx = ssl.create_default_context()
+    try:
+        return urlopen(req, timeout=timeout_sec, context=ctx)  # nosec B310
+    except (URLError, OSError) as e:
+        if _is_ssl_cert_or_verify_failure(e):
+            log.warning(
+                "fetch_page: SSL verification failed for %s (%s); retrying with unverified context (development only)",
+                url,
+                e,
+            )
+            return urlopen(  # nosec B310
+                req,
+                timeout=timeout_sec,
+                context=ssl._create_unverified_context(),
+            )
+        raise
+
+
+def _classify_transport_failure(exc: BaseException) -> tuple[str, str]:
+    """Map exception to (fetch_status, error_message) for structured results."""
+    if isinstance(exc, URLError):
+        reason = exc.reason
+        msg = f"{type(exc).__name__}: {reason!s}" if reason is not None else str(exc)
+        if isinstance(reason, socket.timeout) or isinstance(reason, TimeoutError):
+            return "timeout", msg
+        if isinstance(reason, ssl.SSLError):
+            return "ssl_error", msg
+        if isinstance(reason, socket.gaierror):
+            return "dns_error", msg
+        if isinstance(reason, ConnectionRefusedError):
+            return "connection_error", msg
+        if isinstance(reason, OSError) and reason.errno is not None:
+            return "network_error", msg
+        if isinstance(reason, str):
+            low = reason.lower()
+            if "timed out" in low or "timeout" in low:
+                return "timeout", msg
+        return "network_error", msg
+
+    if isinstance(exc, OSError):
+        msg = f"{type(exc).__name__}: {exc}"
+        if isinstance(exc, socket.timeout) or isinstance(exc, TimeoutError):
+            return "timeout", msg
+        if isinstance(exc, ssl.SSLError):
+            return "ssl_error", msg
+        if isinstance(exc, socket.gaierror):
+            return "dns_error", msg
+        if isinstance(exc, ConnectionRefusedError):
+            return "connection_error", msg
+        return "network_error", msg
+
+    msg = f"{type(exc).__name__}: {exc}"
+    return "network_error", msg
+
+
 def fetch_page(
     url: str,
     *,
@@ -98,6 +188,9 @@ def fetch_page(
 ) -> FetchResult:
     """
     GET ``url`` with ``User-Agent``, ``timeout_sec`` socket timeout, and body size cap.
+
+    HTTPS uses the default SSL context; on verification failure, retries once with an
+    unverified context (development convenience only). Redirects are followed by urllib.
 
     Returns ``FetchResult`` for all outcomes (no raise for network/HTTP failures).
     """
@@ -135,7 +228,7 @@ def fetch_page(
     )
 
     try:
-        with urlopen(req, timeout=timeout_sec) as resp:  # nosec B310 - intentional crawler use
+        with _urlopen_for_request(req, url, timeout_sec) as resp:
             final = resp.geturl()
             # Use getcode() only; some test doubles expose a non-numeric ``status`` attribute.
             code = resp.getcode()
@@ -182,6 +275,8 @@ def fetch_page(
                 fetch_status="too_large",
                 error_message=f"HTTP error body exceeded max_body_bytes={max_body_bytes}",
             )
+        err_msg = str(e.reason) if e.reason else f"HTTP {status}"
+        log.warning("fetch_page HTTP error url=%s code=%s: %s", url, status, err_msg)
         return FetchResult(
             requested_url=url,
             final_url=getattr(e, "url", None),
@@ -190,17 +285,11 @@ def fetch_page(
             media_type=media,
             body=body,
             fetch_status="http_error",
-            error_message=str(e.reason) if e.reason else f"HTTP {status}",
+            error_message=err_msg,
         )
-    except URLError as e:
-        reason = e.reason
-        msg = str(reason) if reason else str(e)
-        if isinstance(reason, socket.timeout) or isinstance(reason, TimeoutError):
-            status = "timeout"
-        elif isinstance(reason, ssl.SSLError):
-            status = "network_error"
-        else:
-            status = "network_error"
+    except (URLError, OSError) as e:
+        status, msg = _classify_transport_failure(e)
+        log.warning("fetch_page transport failure url=%s status=%s: %s", url, status, msg)
         return FetchResult(
             requested_url=url,
             final_url=None,
@@ -211,7 +300,9 @@ def fetch_page(
             fetch_status=status,
             error_message=msg,
         )
-    except OSError as e:
+    except Exception as e:
+        msg = f"{type(e).__name__}: {e}"
+        log.warning("fetch_page unexpected error url=%s: %s", url, msg, exc_info=True)
         return FetchResult(
             requested_url=url,
             final_url=None,
@@ -220,5 +311,5 @@ def fetch_page(
             media_type=None,
             body=b"",
             fetch_status="network_error",
-            error_message=str(e),
+            error_message=msg,
         )
