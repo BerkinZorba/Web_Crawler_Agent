@@ -27,7 +27,7 @@ The system must remain **explainable** and **stdlib-oriented** (no full crawler 
 | I4 | **Duplicate URLs are not enqueued twice within the same run** (per normalized URL). | SQLite `UNIQUE (crawl_run_id, url)` on `frontier`; `url_known_for_run` + `try_enqueue_url`. |
 | I5 | Each fetched URL produces a **page** row (URL after redirect normalization where applicable), **HTTP metadata**, optional **title** and **text** for search. | `Fetcher` + `extract_title` / `extract_links_and_text` or fallback text slice for non-HTML success. |
 | I6 | After a successful fetch, the page is **indexed** (tokenized; term frequencies stored) so it can appear in search. | `Indexer.index_page` on `fetch_status == "ok"`. |
-| I7 | User can **initialize** the database and **inspect** high-level state. | CLI: `init-db`, `status`. |
+| I7 | User can **initialize** the database, **inspect** high-level state, and **repair** stuck frontier `processing` rows. | CLI: `init-db`, `status`, `resume`. |
 
 ### 2.2 Search (`search`)
 
@@ -69,7 +69,7 @@ The system must remain **explainable** and **stdlib-oriented** (no full crawler 
 
 ```
 CLI (src/cli.py)
-    → init-db / index / search / status
+    → init-db / index / search / status / resume
          │
          ├─ index ──► CrawlCoordinator (src/crawler/coordinator.py)
          │                 │
@@ -138,7 +138,7 @@ Persistence: SQLite schema (src/storage/schema.sql), Repositories (src/storage/r
 
 | Entity | Role |
 |--------|------|
-| **`crawl_runs`** | One row per `index` invocation: `origin_url`, `max_depth`, `status` (`active` / `completed` / `failed`), timestamps. |
+| **`crawl_runs`** | One row per `index` invocation: `origin_url`, `max_depth`, `status` (`active` / `completed` / `failed` / `interrupted`), timestamps. |
 | **`frontier`** | Discovered URLs per run: `url`, `origin_url`, `depth`, `discovered_from`, `status` (`queued` / `processing` / `done` / `failed`). **Unique** `(crawl_run_id, url)`. |
 | **`pages`** | Stored document per run and URL: content, fetch metadata, **`indexed_status`** (`not_indexed` / `indexing` / `indexed` / `index_failed`). **Unique** `(crawl_run_id, url)`. |
 | **`terms`** | Global vocabulary: `term` string **unique**. |
@@ -165,7 +165,7 @@ Aligned with the code and README-level caveats:
 - **No `robots.txt`** or crawl-delay policy.
 - **URL normalization is limited** — scheme/host/path variants and **redirect final URLs** can create **extra rows** or near-duplicates compared to human “one canonical URL.”
 - **No `<base href>`** handling; relative links resolve against the **response URL** passed to the extractor only.
-- **Resume / crash recovery** is partial: `requeue_stale_processing` exists in storage but **no CLI** exposes it; stuck **`processing`** or **`indexing`** rows may need manual intervention or a fresh run.
+- **Resume (partial):** CLI **`resume`** and coordinator startup call **`requeue_all_stale_processing()`**, moving frontier **`processing` → `queued`** globally. There is **no** “continue run *id*”; each **`index`** starts a **new** run, so remaining **`queued`** work on an interrupted run is **not** auto-drained. Pages stuck in **`indexing`** are unchanged by **`resume`** (search already ignores them until **`indexed`** or **`index_failed`**).
 - **Fetcher body size cap** and **non-HTML** handling imply incomplete text for some resources.
 - **Search cap**: candidate SQL **`LIMIT`** (default 2000) and result **`LIMIT`** (50) mean very large corpora may miss some matches in ranking.
 - **Tokenizer / stopwords** — queries that tokenize to nothing yield empty results.

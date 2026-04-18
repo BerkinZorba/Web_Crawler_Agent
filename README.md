@@ -50,6 +50,7 @@ Run from the **project root** so `src` is importable as a package.
 | **index** | Run one **crawl run**: `--origin` URL and `--depth` *k* (max hop depth). |
 | **search** | Keyword search over **indexed** pages only: `--query "..."`. |
 | **status** | Print DB path, page/index counts, and recent crawl runs + frontier stats. |
+| **resume** | Re-queue frontier rows stuck in **`processing`** (e.g. after a crash). See §7. |
 
 ```bash
 python3 -m src.main --help
@@ -57,6 +58,7 @@ python3 -m src.main init-db
 python3 -m src.main index --origin https://example.com/ --depth 1
 python3 -m src.main search --query "documentation"
 python3 -m src.main status
+python3 -m src.main resume
 ```
 
 ---
@@ -112,12 +114,28 @@ So backpressure is **persisted queue depth + polling**, not a separate in-memory
 
 ---
 
-## 7. Known limitations (read before demo or grading)
+## 7. Resume behavior (partial)
+
+The system provides **partial** resume support for stuck frontier state, not full “continue where I left off” crawling.
+
+- **CLI `resume`:** moves **every** frontier row in **`processing`** back to **`queued`** (all crawl runs), and prints how many rows were recovered. Use this after a crash so those URLs can be claimed again **if** something drains that run’s frontier.
+- **Automatic cleanup on new crawl:** `CrawlCoordinator` calls the same global requeue logic **before** creating a new run when you run **`index`**, so stale **`processing`** rows from an earlier session are not left orphaned.
+
+**Limitations:**
+
+- The system does **not** fully continue a **previous** crawl run: there is no `index --continue-run-id`.
+- Each **`index`** creates a **new** `crawl_run_id`; it does not drain remaining **`queued`** URLs from an interrupted older run.
+- **`resume`** repairs **processing → queued**; it does not by itself finish an old run’s queue.
+
+This keeps behavior predictable for a localhost, educational build.
+
+---
+
+## 8. Known limitations (read before demo or grading)
 
 - **Single-threaded crawl:** one URL is processed at a time in the coordinator loop; no parallel fetch pool.
 - **No `robots.txt` enforcement** and no politeness policy beyond timeout, body size cap, and your own judgment about targets.
 - **Limited URL normalization** (`src/crawler/normalizer.py`): ASCII-oriented token-style rules; **http vs https**, trailing-slash variants, and **redirect targets treated as new URLs** can produce **duplicate or near-duplicate pages** in the DB for what humans consider one resource.
-- **Resume is partial / manual:** `FrontierRepository.requeue_stale_processing` can move stuck **`processing`** rows back to **`queued`**, but there is **no dedicated CLI** for it; a crash can leave **`processing`** rows until you fix them in code or SQL.
 - **No `<base href>` handling** in HTML; relative links are resolved against the fetched URL only.
 - **No JavaScript rendering**; only raw HTML is parsed.
 - **Fetcher body size cap** (see `fetcher.py`) — very large documents are truncated.
@@ -125,7 +143,7 @@ So backpressure is **persisted queue depth + polling**, not a separate in-memory
 
 ---
 
-## 8. Ranking logic
+## 9. Ranking logic
 
 Relevance scoring is **explicit and code-documented** in:
 
