@@ -16,7 +16,7 @@ from src.crawler.extractor import extract_links_and_text
 from src.crawler.fetcher import FetchResult
 from src.crawler.frontier import FrontierTask, InMemoryFrontier, wait_for_enqueue_slot
 from src.crawler.normalizer import normalize_url, normalize_url_or_none, resolve_link
-from src.storage.db import open_connection
+from src.storage.db import connect, open_connection
 from src.storage.repositories import Repositories
 
 
@@ -94,6 +94,39 @@ class CrawlerTests(unittest.TestCase):
 
 
 class CrawlCoordinatorTests(unittest.TestCase):
+    @patch("src.crawler.coordinator.fetch_page")
+    def test_crawl_start_requeues_stale_processing_from_prior_runs(
+        self, mock_fetch: MagicMock
+    ) -> None:
+        """Interrupted prior run leaves processing; a new index run clears it before creating its run."""
+        mock_fetch.return_value = _ok_html(b"<html><body>seed</body></html>")
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "c.db"
+            with connect(db_path, with_schema=True) as conn:
+                repos = Repositories.from_connection(conn)
+                run_old = repos.crawl_runs.create("https://prior.test/", 1)
+                repos.frontier.enqueue_origin(run_old, "https://prior.test/")
+                self.assertIsNotNone(repos.frontier.claim_next_queued(run_old))
+                self.assertEqual(repos.frontier.count_by_status(run_old, "processing"), 1)
+
+            cfg = AppConfig(
+                db_path=db_path,
+                max_workers=1,
+                fetch_timeout_sec=5.0,
+                queue_max_size=100,
+                user_agent="TestCrawler/1",
+            )
+            new_run_id, _ = CrawlCoordinator(cfg).run("https://example.com/", max_depth=0)
+            self.assertNotEqual(new_run_id, run_old)
+
+            conn = open_connection(db_path, with_schema=True)
+            try:
+                repos = Repositories.from_connection(conn)
+                self.assertEqual(repos.frontier.count_by_status(run_old, "processing"), 0)
+                self.assertEqual(repos.frontier.count_by_status(run_old, "queued"), 1)
+            finally:
+                conn.close()
+
     @patch("src.crawler.coordinator.fetch_page")
     def test_depth_limited_enqueue(self, mock_fetch: MagicMock) -> None:
         root_html = b"""<!doctype html><html><body>

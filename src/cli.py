@@ -1,4 +1,4 @@
-"""CLI: init-db, index, search, status — localhost demo interface."""
+"""CLI: init-db, index, search, status, resume — localhost demo interface."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ _EPILOG = dedent(
       python -m src.main index --origin https://example.com/ --depth 1
       python -m src.main search --query "python crawler"
       python -m src.main status
+      python -m src.main resume
     """
 ).strip()
 
@@ -61,10 +62,15 @@ def _cmd_index(config: AppConfig, origin: str, depth: int) -> None:
 
 
 def _cmd_search(config: AppConfig, query: str) -> None:
-    with connect(config.db_path, with_schema=True) as conn:
-        repos = Repositories.from_connection(conn)
-        engine = SearchEngine(repos.search)
-        results = engine.search(query)
+    results: list[tuple[str, str, int]] = []
+    try:
+        with connect(config.db_path, with_schema=True) as conn:
+            repos = Repositories.from_connection(conn)
+            engine = SearchEngine(repos.search)
+            results = engine.search(query)
+    except Exception:
+        log.warning("search: command failed (database or unexpected error)", exc_info=True)
+        results = []
 
     if not results:
         print("No indexed pages matched your query.")
@@ -80,6 +86,15 @@ def _cmd_search(config: AppConfig, query: str) -> None:
     print(f"  {'-' * len(header)}")
     for url, origin_url, depth in results:
         print(f"  {url.ljust(w_url)}  {origin_url.ljust(w_origin)}  {depth}")
+
+
+def _cmd_resume(config: AppConfig) -> None:
+    with connect(config.db_path, with_schema=True) as conn:
+        repos = Repositories.from_connection(conn)
+        n = repos.frontier.requeue_all_stale_processing()
+        conn.commit()
+    print(f"Recovered {n} frontier row(s): processing → queued")
+    log.info("resume: requeued %s stale processing frontier rows", n)
 
 
 def _cmd_status(config: AppConfig) -> None:
@@ -180,6 +195,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show DB path, page/index counts, and recent crawl runs with frontier stats.",
     )
 
+    sub.add_parser(
+        "resume",
+        help="Re-queue frontier rows stuck in processing (e.g. after a crash).",
+    )
+
     return p
 
 
@@ -198,6 +218,8 @@ def main(argv: list[str] | None = None) -> int:
             _cmd_search(config, args.query)
         elif args.command == "status":
             _cmd_status(config)
+        elif args.command == "resume":
+            _cmd_resume(config)
         else:  # pragma: no cover
             parser.error(f"unknown command {args.command!r}")
     except KeyboardInterrupt:

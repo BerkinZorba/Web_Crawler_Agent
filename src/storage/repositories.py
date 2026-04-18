@@ -186,6 +186,17 @@ class FrontierRepository:
         )
         return int(cur.rowcount)
 
+    def requeue_all_stale_processing(self) -> int:
+        """Move every ``processing`` frontier row to ``queued`` (all crawl runs)."""
+        cur = self.conn.execute(
+            """
+            UPDATE frontier
+            SET status = 'queued', updated_at = datetime('now')
+            WHERE status = 'processing'
+            """
+        )
+        return int(cur.rowcount)
+
 
 @dataclass
 class PageRepository:

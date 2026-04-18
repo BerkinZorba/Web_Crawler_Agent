@@ -198,6 +198,26 @@ class StorageTests(unittest.TestCase):
                 self.assertEqual(repos.frontier.count_by_status(run_id, "queued"), 1)
                 self.assertEqual(repos.frontier.count_by_status(run_id, "processing"), 0)
 
+    def test_requeue_all_stale_processing_across_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            with connect(db_path, with_schema=True) as conn:
+                repos = Repositories.from_connection(conn)
+                r1 = repos.crawl_runs.create("https://one.test/", 1)
+                r2 = repos.crawl_runs.create("https://two.test/", 1)
+                repos.frontier.enqueue_origin(r1, "https://one.test/")
+                repos.frontier.enqueue_origin(r2, "https://two.test/")
+                self.assertIsNotNone(repos.frontier.claim_next_queued(r1))
+                self.assertIsNotNone(repos.frontier.claim_next_queued(r2))
+                self.assertEqual(repos.frontier.count_by_status(r1, "processing"), 1)
+                self.assertEqual(repos.frontier.count_by_status(r2, "processing"), 1)
+                moved = repos.frontier.requeue_all_stale_processing()
+                self.assertEqual(moved, 2)
+                self.assertEqual(repos.frontier.count_by_status(r1, "queued"), 1)
+                self.assertEqual(repos.frontier.count_by_status(r2, "queued"), 1)
+                self.assertEqual(repos.frontier.count_by_status(r1, "processing"), 0)
+                self.assertEqual(repos.frontier.count_by_status(r2, "processing"), 0)
+
     def test_cross_run_same_url_allowed_two_rows(self) -> None:
         """UNIQUE is (crawl_run_id, url): same path string in different runs is OK."""
         with tempfile.TemporaryDirectory() as tmp:

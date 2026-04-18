@@ -31,12 +31,20 @@ class CrawlCoordinator:
         """
         Create a crawl run, seed the frontier at depth 0, drain queued URLs until idle.
 
-        Commits after each URL so pages and index rows become visible incrementally.
+        Before creating the run, re-queues any frontier rows still ``processing`` from an
+        earlier crashed session (all crawl runs), then commits after each URL so pages and
+        index rows become visible incrementally.
         """
         origin_norm = normalize_url(origin.strip())
         conn = open_connection(self._config.db_path, with_schema=True)
         try:
             repos = Repositories.from_connection(conn)
+            n_recovered = repos.frontier.requeue_all_stale_processing()
+            if n_recovered:
+                log.warning(
+                    "Re-queued %s frontier row(s) stuck in processing from a prior session",
+                    n_recovered,
+                )
             run_id = repos.crawl_runs.create(origin_norm, max_depth)
             repos.frontier.enqueue_origin(run_id, origin_norm)
             indexer = Indexer(repos.index)
