@@ -102,12 +102,14 @@ class StorageTests(unittest.TestCase):
 
                 term_ids = repos.search.resolve_term_ids(["hello", "world"])
                 self.assertEqual(set(term_ids), {tid_hello, tid_world})
-                hits = repos.search.candidate_pages_for_term_ids(term_ids, limit=10)
+                hits = repos.search.indexed_candidate_stats_for_term_ids(term_ids)
                 self.assertEqual(len(hits), 1)
                 self.assertEqual(hits[0]["url"], "https://example.com/doc")
                 self.assertEqual(hits[0]["origin_url"], "https://example.com/")
                 self.assertEqual(hits[0]["depth"], 1)
-                self.assertEqual(hits[0]["score"], 3)
+                self.assertEqual(hits[0]["matched_distinct"], 2)
+                self.assertEqual(hits[0]["body_sum"], 3)
+                self.assertEqual(hits[0]["title_sum"], 1)
 
     def test_url_known_when_page_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

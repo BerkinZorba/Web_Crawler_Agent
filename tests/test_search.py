@@ -1,8 +1,10 @@
-"""Search/index tests: tokenizer and ranking."""
+"""Search/index tests: tokenizer, ranking, and SearchEngine."""
 
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from src.indexer.ranking import (
     DEPTH_PENALTY_PER_LEVEL,
@@ -12,6 +14,9 @@ from src.indexer.ranking import (
     score_page,
 )
 from src.indexer.tokenizer import token_counts, tokenize
+from src.search.engine import SearchEngine
+from src.storage.db import connect
+from src.storage.repositories import Repositories
 
 
 class SearchTests(unittest.TestCase):
@@ -49,6 +54,68 @@ class SearchTests(unittest.TestCase):
                 title_frequency_sum=0,
                 depth=0,
             )
+
+    def test_search_engine_empty_and_stopword_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "s.db"
+            with connect(db_path, with_schema=True) as conn:
+                repos = Repositories.from_connection(conn)
+                eng = SearchEngine(repos.search)
+                self.assertEqual(eng.search(None), [])
+                self.assertEqual(eng.search(""), [])
+                self.assertEqual(eng.search("   "), [])
+                self.assertEqual(eng.search("the a an"), [])
+
+    def test_search_engine_excludes_not_indexed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "s.db"
+            with connect(db_path, with_schema=True) as conn:
+                repos = Repositories.from_connection(conn)
+                run_id = repos.crawl_runs.create("https://ex.test/", 1)
+                pid = repos.pages.save_fetched_page(
+                    run_id,
+                    url="https://ex.test/hidden",
+                    origin_url="https://ex.test/",
+                    depth=0,
+                    title=None,
+                    content_text="zebra",
+                    http_status=200,
+                    fetch_status="ok",
+                    fetched_at="2026-01-01 00:00:00",
+                    indexed_status="not_indexed",
+                )
+                tid = repos.index.get_or_create_term("zebra")
+                repos.index.replace_page_terms(pid, [(tid, 5, 0)])
+                eng = SearchEngine(repos.search)
+                self.assertEqual(eng.search("zebra"), [])
+
+    def test_search_engine_ranking_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "s.db"
+            with connect(db_path, with_schema=True) as conn:
+                repos = Repositories.from_connection(conn)
+                run_id = repos.crawl_runs.create("https://ex.test/", 1)
+                tid = repos.index.get_or_create_term("python")
+                for url_suffix, freq, depth in (("a", 1, 0), ("b", 5, 0)):
+                    pid = repos.pages.save_fetched_page(
+                        run_id,
+                        url=f"https://ex.test/{url_suffix}",
+                        origin_url="https://ex.test/",
+                        depth=depth,
+                        title=None,
+                        content_text="x",
+                        http_status=200,
+                        fetch_status="ok",
+                        fetched_at="2026-01-01 00:00:00",
+                        indexed_status="not_indexed",
+                    )
+                    repos.index.replace_page_terms(pid, [(tid, freq, 0)])
+                    repos.index.set_page_indexed_status(pid, "indexed")
+                eng = SearchEngine(repos.search)
+                out = eng.search("python")
+                self.assertEqual(len(out), 2)
+                self.assertEqual(out[0][0], "https://ex.test/b")
+                self.assertEqual(out[1][0], "https://ex.test/a")
 
 
 if __name__ == "__main__":

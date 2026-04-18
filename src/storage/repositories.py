@@ -319,15 +319,17 @@ class SearchRepository:
         ).fetchall()
         return [int(r["id"]) for r in rows]
 
-    def candidate_pages_for_term_ids(
+    def indexed_candidate_stats_for_term_ids(
         self,
         term_ids: Sequence[int],
         *,
-        limit: int = 50,
+        max_candidates: int = 2000,
     ) -> list[dict[str, Any]]:
         """
-        Keyword OR search over indexed pages: score = sum of term frequencies.
-        Returns dicts with page_id, url, origin_url, depth, score.
+        Per-page aggregates for ranked keyword search (``indexed`` pages only).
+
+        Each row: page_id, url, origin_url, depth, matched_distinct (query terms hit),
+        body_sum (sum of ``frequency``), title_sum (sum of ``in_title_frequency``).
         """
         ids = sorted(set(term_ids))
         if not ids:
@@ -339,16 +341,18 @@ class SearchRepository:
                 p.url AS url,
                 p.origin_url AS origin_url,
                 p.depth AS depth,
-                SUM(pt.frequency) AS score
+                COUNT(DISTINCT pt.term_id) AS matched_distinct,
+                COALESCE(SUM(pt.frequency), 0) AS body_sum,
+                COALESCE(SUM(pt.in_title_frequency), 0) AS title_sum
             FROM page_terms AS pt
             INNER JOIN pages AS p ON p.id = pt.page_id
             WHERE p.indexed_status = 'indexed'
               AND pt.term_id IN ({placeholders})
-            GROUP BY p.id
-            ORDER BY score DESC
+            GROUP BY p.id, p.url, p.origin_url, p.depth
+            HAVING (COALESCE(SUM(pt.frequency), 0) + COALESCE(SUM(pt.in_title_frequency), 0)) > 0
             LIMIT ?
         """
-        rows = self.conn.execute(sql, (*ids, limit)).fetchall()
+        rows = self.conn.execute(sql, (*ids, max_candidates)).fetchall()
         out: list[dict[str, Any]] = []
         for r in rows:
             out.append(
@@ -357,7 +361,9 @@ class SearchRepository:
                     "url": str(r["url"]),
                     "origin_url": str(r["origin_url"]),
                     "depth": int(r["depth"]),
-                    "score": int(r["score"]),
+                    "matched_distinct": int(r["matched_distinct"]),
+                    "body_sum": int(r["body_sum"]),
+                    "title_sum": int(r["title_sum"]),
                 }
             )
         return out
