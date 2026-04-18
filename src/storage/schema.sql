@@ -3,7 +3,7 @@
 
 PRAGMA foreign_keys = ON;
 
--- One invocation of index(origin, k). status examples: active, completed, failed.
+-- One invocation of index(origin, k). status: active, completed, failed, interrupted.
 CREATE TABLE IF NOT EXISTS crawl_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     origin_url TEXT NOT NULL,

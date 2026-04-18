@@ -34,9 +34,15 @@ class CrawlCoordinator:
         Before creating the run, re-queues any frontier rows still ``processing`` from an
         earlier crashed session (all crawl runs), then commits after each URL so pages and
         index rows become visible incrementally.
+
+        Run lifecycle: ``active`` (row created) → ``completed`` on normal finish, or
+        ``interrupted`` / ``failed`` if ``run`` exits early; a created run is not left
+        ``active`` once this method returns or re-raises.
         """
         origin_norm = normalize_url(origin.strip())
         conn = open_connection(self._config.db_path, with_schema=True)
+        repos: Repositories | None = None
+        run_id: int | None = None
         try:
             repos = Repositories.from_connection(conn)
             n_recovered = repos.frontier.requeue_all_stale_processing()
@@ -45,7 +51,7 @@ class CrawlCoordinator:
                     "Re-queued %s frontier row(s) stuck in processing from a prior session",
                     n_recovered,
                 )
-            run_id = repos.crawl_runs.create(origin_norm, max_depth)
+            run_id = repos.crawl_runs.create(origin_norm, max_depth, status="active")
             repos.frontier.enqueue_origin(run_id, origin_norm)
             indexer = Indexer(repos.index)
             max_seen_depth = 0
@@ -95,6 +101,16 @@ class CrawlCoordinator:
                 max_depth_pages=merged_max,
             )
             return run_id, progress
+        except KeyboardInterrupt:
+            if run_id is not None and repos is not None:
+                repos.crawl_runs.update_status(run_id, "interrupted")
+                conn.commit()
+            raise
+        except Exception:
+            if run_id is not None and repos is not None:
+                repos.crawl_runs.update_status(run_id, "failed")
+                conn.commit()
+            raise
         finally:
             conn.close()
 

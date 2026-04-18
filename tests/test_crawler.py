@@ -17,7 +17,7 @@ from src.crawler.fetcher import FetchResult
 from src.crawler.frontier import FrontierTask, InMemoryFrontier, wait_for_enqueue_slot
 from src.crawler.normalizer import normalize_url, normalize_url_or_none, resolve_link
 from src.storage.db import connect, open_connection
-from src.storage.repositories import Repositories
+from src.storage.repositories import CrawlRunRepository, Repositories
 
 
 def _ok_html(body: bytes) -> FetchResult:
@@ -124,6 +124,64 @@ class CrawlCoordinatorTests(unittest.TestCase):
                 repos = Repositories.from_connection(conn)
                 self.assertEqual(repos.frontier.count_by_status(run_old, "processing"), 0)
                 self.assertEqual(repos.frontier.count_by_status(run_old, "queued"), 1)
+            finally:
+                conn.close()
+
+    @patch("src.crawler.coordinator.fetch_page")
+    def test_crawl_run_status_failed_on_coordinator_error(self, mock_fetch: MagicMock) -> None:
+        mock_fetch.return_value = _ok_html(b"<html><body>x</body></html>")
+        orig_update = CrawlRunRepository.update_status
+
+        def bust(self: CrawlRunRepository, crawl_run_id: int, status: str) -> None:
+            if status == "completed":
+                raise RuntimeError("simulated completion failure")
+            orig_update(self, crawl_run_id, status)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "c.db"
+            cfg = AppConfig(
+                db_path=db_path,
+                max_workers=1,
+                fetch_timeout_sec=5.0,
+                queue_max_size=100,
+                user_agent="TestCrawler/1",
+            )
+            with patch.object(CrawlRunRepository, "update_status", bust):
+                with self.assertRaises(RuntimeError):
+                    CrawlCoordinator(cfg).run("https://example.com/", max_depth=0)
+            conn = open_connection(db_path, with_schema=True)
+            try:
+                row = conn.execute(
+                    "SELECT status FROM crawl_runs ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+                self.assertIsNotNone(row)
+                self.assertEqual(str(row["status"]), "failed")
+            finally:
+                conn.close()
+
+    @patch("src.crawler.coordinator.fetch_page")
+    def test_crawl_run_status_interrupted_on_keyboard_interrupt(
+        self, mock_fetch: MagicMock
+    ) -> None:
+        mock_fetch.side_effect = KeyboardInterrupt()
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "c.db"
+            cfg = AppConfig(
+                db_path=db_path,
+                max_workers=1,
+                fetch_timeout_sec=5.0,
+                queue_max_size=100,
+                user_agent="TestCrawler/1",
+            )
+            with self.assertRaises(KeyboardInterrupt):
+                CrawlCoordinator(cfg).run("https://example.com/", max_depth=0)
+            conn = open_connection(db_path, with_schema=True)
+            try:
+                row = conn.execute(
+                    "SELECT status FROM crawl_runs ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+                self.assertIsNotNone(row)
+                self.assertEqual(str(row["status"]), "interrupted")
             finally:
                 conn.close()
 
