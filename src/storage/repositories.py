@@ -170,6 +170,22 @@ class FrontierRepository:
         ).fetchone()
         return int(row["c"])
 
+    def requeue_stale_processing(self, crawl_run_id: int) -> int:
+        """
+        Resume / recovery: move ``processing`` rows back to ``queued`` for this run.
+
+        Use after a crash so claimed work can be fetched again.
+        """
+        cur = self.conn.execute(
+            """
+            UPDATE frontier
+            SET status = 'queued', updated_at = datetime('now')
+            WHERE crawl_run_id = ? AND status = 'processing'
+            """,
+            (crawl_run_id,),
+        )
+        return int(cur.rowcount)
+
 
 @dataclass
 class PageRepository:
