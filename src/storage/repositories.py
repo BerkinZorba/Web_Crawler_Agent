@@ -43,6 +43,19 @@ class CrawlRunRepository:
             (status, crawl_run_id),
         )
 
+    def recent_runs(self, limit: int = 10) -> list[sqlite3.Row]:
+        return list(
+            self.conn.execute(
+                """
+                SELECT id, origin_url, max_depth, status, created_at, updated_at
+                FROM crawl_runs
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        )
+
 
 @dataclass
 class FrontierRepository:
