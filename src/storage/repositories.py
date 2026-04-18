@@ -147,6 +147,16 @@ class FrontierRepository:
             (status, frontier_id),
         )
 
+    def count_by_status(self, crawl_run_id: int, status: str) -> int:
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*) AS c FROM frontier
+            WHERE crawl_run_id = ? AND status = ?
+            """,
+            (crawl_run_id, status),
+        ).fetchone()
+        return int(row["c"])
+
 
 @dataclass
 class PageRepository:
@@ -223,6 +233,20 @@ class PageRepository:
         row = cur.fetchone()
         assert row is not None
         return int(row["id"])
+
+    def count_for_run(self, crawl_run_id: int) -> int:
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS c FROM pages WHERE crawl_run_id = ?",
+            (crawl_run_id,),
+        ).fetchone()
+        return int(row["c"])
+
+    def max_depth_for_run(self, crawl_run_id: int) -> int:
+        row = self.conn.execute(
+            "SELECT COALESCE(MAX(depth), 0) AS m FROM pages WHERE crawl_run_id = ?",
+            (crawl_run_id,),
+        ).fetchone()
+        return int(row["m"])
 
 
 @dataclass

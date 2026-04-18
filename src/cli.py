@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 
 from src.config import AppConfig, load_config
+from src.crawler.coordinator import CrawlCoordinator
 from src.storage.db import connect
 from src.utils.logging_utils import setup_logging
 
@@ -19,9 +20,19 @@ def _cmd_init_db(config: AppConfig) -> None:
     log.info("Database ready at %s", config.db_path)
 
 
-def _cmd_index(_config: AppConfig, _origin: str, _depth: int) -> None:
-    # TODO: create crawl run, seed frontier, run coordinator + workers with backpressure.
-    raise NotImplementedError("index will run the crawl coordinator; not implemented yet.")
+def _cmd_index(config: AppConfig, origin: str, depth: int) -> None:
+    coordinator = CrawlCoordinator(config)
+    run_id, progress = coordinator.run(origin, depth)
+    log.info(
+        "Crawl run %s finished: queued=%s processing=%s done=%s failed=%s pages=%s max_depth=%s",
+        run_id,
+        progress.frontier_queued,
+        progress.frontier_processing,
+        progress.frontier_done,
+        progress.frontier_failed,
+        progress.pages_recorded,
+        progress.max_depth_pages,
+    )
 
 
 def _cmd_search(_config: AppConfig, _query: str) -> None:

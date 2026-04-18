@@ -11,6 +11,33 @@ from src.crawler.normalizer import normalize_url_or_none
 _WS = re.compile(r"\s+")
 
 
+class _TitleParser(HTMLParser):
+    """First <title> contents only (best-effort)."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._in_title = False
+        self._parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() == "title":
+            self._in_title = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "title":
+            self._in_title = False
+
+    def handle_data(self, data: str) -> None:
+        if self._in_title:
+            self._parts.append(data)
+
+    @property
+    def title(self) -> str | None:
+        raw = "".join(self._parts).strip()
+        cleaned = _WS.sub(" ", raw).strip()
+        return cleaned or None
+
+
 class _HtmlLinkAndTextParser(HTMLParser):
     """Collect normalized http(s) links from <a href> and rough visible text."""
 
@@ -62,6 +89,15 @@ def _attr(attrs: list[tuple[str, str | None]], name: str) -> str | None:
         if k.lower() == name.lower():
             return v
     return None
+
+
+def extract_title(html: bytes) -> str | None:
+    """Return document title text if a ``<title>`` tag exists."""
+    text = html.decode("utf-8", errors="replace")
+    p = _TitleParser()
+    p.feed(text)
+    p.close()
+    return p.title
 
 
 def extract_links_and_text(html: bytes, base_url: str) -> tuple[list[str], str]:

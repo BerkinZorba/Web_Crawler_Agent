@@ -26,6 +26,17 @@ def apply_schema(conn: sqlite3.Connection, schema_path: Path | None = None) -> N
     conn.executescript(path.read_text(encoding="utf-8"))
 
 
+def open_connection(db_path: Path, *, with_schema: bool = True) -> sqlite3.Connection:
+    """
+    Open a SQLite connection without wrapping a transaction.
+    Caller commits explicitly (e.g. after each crawled URL) for incremental visibility.
+    """
+    conn = _connection(db_path)
+    if with_schema:
+        ensure_schema(conn)
+    return conn
+
+
 def ensure_schema(conn: sqlite3.Connection, schema_path: Path | None = None) -> None:
     """Apply `schema.sql` once when the database has not been initialized yet."""
     row = conn.execute(
