@@ -1,4 +1,4 @@
-"""Search orchestration: tokenizer + repositories (TODO)."""
+"""Search orchestration: tokenizer + repositories."""
 
 from __future__ import annotations
 
@@ -11,7 +11,8 @@ class SearchEngine:
         self._repo = search_repo
 
     def search(self, query: str) -> list[tuple[str, str, int]]:
-        # TODO: return list of (relevant_url, origin_url, depth) for indexed pages only.
-        _ = tokenize(query)
-        _ = self._repo.search_placeholder(query)
-        raise NotImplementedError
+        term_ids = self._repo.resolve_term_ids(tokenize(query))
+        if not term_ids:
+            return []
+        rows = self._repo.candidate_pages_for_term_ids(term_ids, limit=50)
+        return [(r["url"], r["origin_url"], r["depth"]) for r in rows]
